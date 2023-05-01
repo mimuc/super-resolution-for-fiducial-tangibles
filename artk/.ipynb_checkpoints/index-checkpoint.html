@@ -1,0 +1,157 @@
+<html>
+<body>
+<p id="result">Image NaN</p>
+<div id="img-div"></div>
+
+<script src="artoolkit.min.js"></script>
+<script src="three.min.js"></script>
+<script>
+
+var cameraParam = new ARCameraParam();
+var ar;
+
+var timeout = null;
+const interval = 200;
+var response = null;
+
+var patternIndex = 1;
+
+const url = "http://127.0.0.1:8080";
+
+cameraParam.onload = function() {
+    initAR(600);
+};
+
+function radians_to_degrees(radians)
+{
+    var pi = Math.PI;
+    return radians * (180/pi);
+}
+
+function degrees_to_radians(degrees)
+{
+  var pi = Math.PI;
+  return degrees * (pi/180);
+}
+
+function initAR(size) {
+    ar = new ARController(size, size, cameraParam);
+    ar.setPatternDetectionMode(artoolkit.AR_TEMPLATE_MATCHING_COLOR);
+
+    ar.addEventListener('getMarker', function (ev) {
+        // found new marker
+        var id = ev.data.marker.id + 1;
+        console.log("found marker: " + id);
+
+        // stop the timeout 
+        clearTimeout(timeout);
+
+        // if correct marker, get rotation
+        // OPTION: use this for single pattern
+        //if(id == 1) {
+        // OPTION: use this for multiple patterns
+        if(response[1].includes('id' + id + 'k_')) {
+            var m = new THREE.Matrix4();
+            m.set(
+                ev.data.matrix[0], ev.data.matrix[1], ev.data.matrix[2], ev.data.matrix[3],
+                ev.data.matrix[4], ev.data.matrix[5], ev.data.matrix[6], ev.data.matrix[7],
+                ev.data.matrix[8], ev.data.matrix[9], ev.data.matrix[10], ev.data.matrix[11],
+                ev.data.matrix[12], ev.data.matrix[13], ev.data.matrix[14], ev.data.matrix[15]);
+
+            const euler = new THREE.Euler();
+            euler.setFromRotationMatrix(m);
+
+            var angle_pred = (360 + radians_to_degrees(euler.z)) % 360;
+            var angle_true = response[2];
+
+            cos_sin_true = [Math.cos(degrees_to_radians(angle_true)), Math.sin(degrees_to_radians(angle_true))]
+            cos_sin_pred = [Math.cos(degrees_to_radians(angle_pred)), Math.sin(degrees_to_radians(angle_pred))]
+
+            det_cos_sin_mae = [cos_sin_true[0] -  cos_sin_pred[0], cos_sin_true[1] -  cos_sin_pred[1]]
+
+            // flip here because of atan2 implementation
+            angle_diff = Math.abs(radians_to_degrees(Math.atan2(Math.sin(det_cos_sin_mae[0]), Math.cos(det_cos_sin_mae[1]))))
+
+            // log correct marker and request new image
+            sendGET(1, angle_diff);
+        } else {
+            // log wrong marker and request new image
+            sendGET(-1, -1);  
+        }
+    });
+    
+    // OPTION: use this for multiple patterns
+    loadNextPattern();
+    // OPTION: use this for single pattern with given id
+    //loadSpecificPattern(6);
+}
+
+function loadNextPattern() {
+    ar.loadMarker('./Patterns_patt/4x4_' + patternIndex + '.patt', function (marker) {
+        console.log('loaded marker:', marker);
+
+        // last marker is loaded, start; can only load 50 marker pattern 
+        if(marker == 49) {
+            sendGET(9, -1);
+        } else {
+            patternIndex++;
+            loadNextPattern();
+        }
+    });
+}
+    
+
+function loadSpecificPattern(specificPatternIndex) {
+    ar.loadMarker('./Patterns_patt/4x4_' + specificPatternIndex + '.patt', function (marker) {
+        console.log('loaded marker:', marker);
+
+        // last marker is loaded, start; can only load 50 marker pattern 
+        sendGET(9, -1);
+    });
+}
+
+function sendGET(code, rotation){
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url + "?" + "code=" + code + "&" + "rotation=" + rotation, true);
+    xhr.addEventListener("load", function() {
+        if(xhr.status == 200) {
+            // force updated image
+            response = xhr.responseText.split(",");
+            console.log(response);
+            document.getElementById("result").textContent =  "Image: " + response[0] + ", ID: " + response[1] + ", Angle: " + response[2];
+
+            // create new image, clear container and append new image
+            var newImg = document.createElement('img');
+            newImg.src = response[3] +'?' + response[0]; 
+            newImg.id = "image" + response[0]; 
+            var div = document.getElementById('img-div');
+            div.innerHTML = '';
+            div.appendChild(newImg);
+
+            // wait until the new image is loaded
+            var img = document.getElementById(newImg.id);
+            img.onload = function () {
+                // process image
+                ar.process(img);
+
+                // set timeout in case nothing is found 
+                timeout = setTimeout(function() {
+                    console.log("found no marker");
+                    sendGET(-2, -1);
+                }, interval);
+            };
+        }
+        // end of file
+        else if (xhr.status == 201) {
+            console.log("finished");
+        }
+    });
+    xhr.send(null)
+}
+
+cameraParam.load('camera_para.dat');
+
+</script>
+
+</body>
+</html>
